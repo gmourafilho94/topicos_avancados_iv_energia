@@ -24,3 +24,14 @@ Métodos de metrificação e o porquê que a metrificação deve vir direto da a
 ```
 
 Assim variando/melhorando o algoritmo e fixando os valores de teste acharíamos o impacto. Montagem de csv esta dentro da `./aula_2`
+
+
+### Aula_3
+
+Ordenação e consumo de energia. A complexidade do algoritmo pode ser expressada em duas grandezas: 
+* Complexidade -> número de operação (complexidade de tempo)
+* Quantidade de memória utilizada
+
+> Dica é verificar a quantidade de "fors" no algoritmo para verificar o O(n) da solução
+
+A atividade consistiu em criar dois algoritmos de ordenação e fazer tabulação de suas performances. Para facilitar o processso de construcao dos arrays e criacao dos csvs foram criados tres scripts [medicao](./aula_3/medicao.sh) e [implementacao](./aula_3/implementacao.sh), [criacao](./aula_3/criacao_lista.sh) fazendo com que o processo seja mais automatizado.  
