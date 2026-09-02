@@ -4,12 +4,14 @@
 # perf, gerando um csv por (algoritmo, tamanho, execucao).
 #
 # Uso: ./implementacao.sh [opcoes]
-#   -a, --algoritmo    bolha | insertion | todos   (padrao: todos)
+#   -a, --algoritmo    "bolha insertion" | bubble | todos   (padrao: todos)
 #   -t, --tamanhos     "10 100 1000"               (padrao: todos os .in achados)
 #   -r, --repeticoes   N                           (padrao: 1)
 #   -T, --timeout      segundos por execucao       (padrao: 0 = sem limite)
 #   -s, --sem-sudo     nao eleva privilegio (energia sai <not supported>)
 #   -l, --sem-listas   nao chama o criacao_lista.sh antes de medir
+#   -c, --limpar       apaga os csv dos algoritmos/tamanhos escolhidos e recomeca do exec01
+#   -y, --sim          responde "sim" a confirmacao do --limpar
 #   -f, --forcar       refaz csv ja existente
 #   -h, --ajuda
 
@@ -23,9 +25,10 @@ declare -a CSV_TERMS
 declare -a FOLDERS_TERMS
 declare -a SCRIPT_FILES
 
-CSV_TERMS=("bolha" "insertion")
-FOLDERS_TERMS=("bubble" "insert")
-SCRIPT_FILES=("bubble_sort.py" "insertion.py")
+# arrays paralelos: termo do csv, pasta e script de cada algoritmo
+CSV_TERMS=("bolha"        "insertion"    "bolha_better"     "insertion_better")
+FOLDERS_TERMS=("bubble"   "insert"       "bubble"           "insert")
+SCRIPT_FILES=("bubble_sort.py" "insertion.py" "bubble_better.py" "insertion_better.py")
 
 PASTA_LISTAS="geracoes_listas"
 SCRIPT_LISTAS="criacao_lista.sh"
@@ -36,7 +39,7 @@ EVENTOS="power/energy-pkg/,duration_time,user_time,system_time"
 
 
 mostra_ajuda() {
-    sed -n '3,14p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '3,16p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 
@@ -46,6 +49,8 @@ REPETICOES=1
 TEMPO_LIMITE=0
 SEM_SUDO=0
 SEM_LISTAS=0
+LIMPAR=0
+CONFIRMADO=0
 FORCAR=0
 
 while [ $# -gt 0 ]; do
@@ -56,6 +61,8 @@ while [ $# -gt 0 ]; do
         -T|--timeout)     TEMPO_LIMITE=${2:-}; shift 2 ;;
         -s|--sem-sudo)    SEM_SUDO=1; shift ;;
         -l|--sem-listas)  SEM_LISTAS=1; shift ;;
+        -c|--limpar)      LIMPAR=1; shift ;;
+        -y|--sim)         CONFIRMADO=1; shift ;;
         -f|--forcar)      FORCAR=1; shift ;;
         -h|--ajuda)       mostra_ajuda; exit 0 ;;
         *) echo "Opcao desconhecida: $1"; mostra_ajuda; exit 1 ;;
@@ -92,6 +99,7 @@ done
 
 # o contador power/energy-pkg/ so e lido com privilegio (ou perf_event_paranoid <= 0)
 PREFIXO_PERF=""
+ESCOPO=""
 paranoid=$(cat /proc/sys/kernel/perf_event_paranoid 2> /dev/null || echo 4)
 
 if [ "$SEM_SUDO" -eq 1 ]; then
@@ -99,11 +107,25 @@ if [ "$SEM_SUDO" -eq 1 ]; then
 elif [ "$(id -u)" -ne 0 ] && [ "$paranoid" -gt 0 ]; then
     if command -v sudo > /dev/null; then
         echo "perf_event_paranoid=$paranoid: usando sudo para ler power/energy-pkg/"
-        PREFIXO_PERF="sudo"
         sudo -v || { echo "Erro: sudo negado, a energia sairia como <not supported>"; exit 1; }
+        # -n: o sudo do comando medido nunca pode pedir senha, porque o stdin
+        # dele e o arquivo .in da lista (ele leria a lista como senha e falharia)
+        PREFIXO_PERF="sudo -n"
     else
         echo "Aviso: sem privilegio e sem sudo, a energia deve sair como <not supported>"
     fi
+fi
+
+# power/energy-pkg/ vem da PMU "power" (RAPL), que e por pacote e nao por tarefa
+# (ela expoe .../devices/power/cpumask): medir so o processo devolve
+# <not supported>. O contador exige o modo system-wide (-a), que por sua vez
+# exige privilegio; sem ele o -a faria o perf abortar e perder ate os tempos.
+if [ -n "$PREFIXO_PERF" ] || [ "$(id -u)" -eq 0 ] || [ "$paranoid" -le 0 ]; then
+    ESCOPO="-a"
+    echo "Medindo em modo system-wide (-a): a energia e a da maquina inteira"
+    echo "durante a execucao, entao mantenha o resto do sistema ocioso."
+else
+    echo "Aviso: sem modo system-wide, so os tempos serao medidos"
 fi
 
 
@@ -114,16 +136,24 @@ INDICES=()
 if [ "$ALGORITMO" = "todos" ]; then
     for indice in "${!CSV_TERMS[@]}"; do INDICES+=("$indice"); done
 else
-    for indice in "${!CSV_TERMS[@]}"; do
-        if [ "$ALGORITMO" = "${CSV_TERMS[$indice]}" ] || [ "$ALGORITMO" = "${FOLDERS_TERMS[$indice]}" ]; then
-            INDICES+=("$indice")
+    # aceita varios algoritmos ("bolha bolha_better") e tambem o nome da pasta
+    for pedido in $ALGORITMO; do
+        achou=0
+
+        for indice in "${!CSV_TERMS[@]}"; do
+            if [ "$pedido" = "${CSV_TERMS[$indice]}" ] || [ "$pedido" = "${FOLDERS_TERMS[$indice]}" ]; then
+                INDICES+=("$indice")
+                achou=1
+            fi
+        done
+
+        if [ "$achou" -eq 0 ]; then
+            echo "Erro: algoritmo '$pedido' desconhecido (use: ${CSV_TERMS[*]} ou todos)"
+            exit 1
         fi
     done
 
-    if [ ${#INDICES[@]} -eq 0 ]; then
-        echo "Erro: algoritmo '$ALGORITMO' desconhecido (use: ${CSV_TERMS[*]} ou todos)"
-        exit 1
-    fi
+    mapfile -t INDICES < <(printf '%s\n' "${INDICES[@]}" | sort -n -u)
 fi
 
 
@@ -174,12 +204,68 @@ fi
 mapfile -t LISTA_TAMANHOS < <(printf '%s\n' "${LISTA_TAMANHOS[@]}" | sort -n -u)
 
 
+# remove os csv dos algoritmos/tamanhos escolhidos, para a numeracao voltar ao exec01
+if [ "$LIMPAR" -eq 1 ]; then
+    declare -a A_REMOVER
+    A_REMOVER=()
+
+    for indice in "${INDICES[@]}"; do
+        for tamanho in "${LISTA_TAMANHOS[@]}"; do
+            for arquivo in "${FOLDERS_TERMS[$indice]}"/"${CSV_TERMS[$indice]}_${tamanho}"_exec[0-9]*.csv; do
+                [ -e "$arquivo" ] && A_REMOVER+=("$arquivo")
+            done
+        done
+    done
+
+    if [ ${#A_REMOVER[@]} -eq 0 ]; then
+        echo "Limpeza: nenhum csv anterior para os algoritmos/tamanhos escolhidos"
+    else
+        echo "Limpeza: ${#A_REMOVER[@]} csv(s) serao APAGADOS:"
+        printf '%s\n' "${A_REMOVER[@]}" | sed 's/^/  /' | head -n 10
+        [ ${#A_REMOVER[@]} -gt 10 ] && echo "  ... e outros $(( ${#A_REMOVER[@]} - 10 ))"
+
+        if [ "$CONFIRMADO" -eq 0 ]; then
+            if [ ! -t 0 ]; then
+                echo "Erro: --limpar precisa de confirmacao; use --sim para rodar sem terminal"
+                exit 1
+            fi
+
+            printf 'Apagar esses arquivos? [s/N] '
+            read -r resposta
+
+            case "$resposta" in
+                s|S|sim|SIM) ;;
+                *) echo "Limpeza cancelada, nada foi apagado"; exit 1 ;;
+            esac
+        fi
+
+        # os csv das rodadas com sudo pertencem ao root
+        rm -f "${A_REMOVER[@]}" 2> /dev/null
+
+        for arquivo in "${A_REMOVER[@]}"; do
+            [ -e "$arquivo" ] || continue
+
+            if ! command -v sudo > /dev/null; then
+                echo "Erro: sem permissao para apagar '$arquivo'"
+                exit 1
+            fi
+
+            sudo rm -f "$arquivo" || { echo "Erro: falha ao apagar '$arquivo'"; exit 1; }
+        done
+
+        echo "Limpeza: ${#A_REMOVER[@]} csv(s) removidos"
+    fi
+
+    echo
+fi
+
+
 # proximo numero de execucao livre para o par (termo, tamanho)
 proxima_execucao() {
     local pasta=$1 termo=$2 tamanho=$3
     local arquivo base numero maior=0
 
-    for arquivo in "$pasta"/"${termo}_${tamanho}"_exec*.csv; do
+    for arquivo in "$pasta"/"${termo}_${tamanho}"_exec[0-9]*.csv; do
         [ -e "$arquivo" ] || continue
         base=$(basename "$arquivo" .csv)
         numero=$((10#${base##*_exec}))
@@ -190,9 +276,21 @@ proxima_execucao() {
 }
 
 
+# o timestamp do sudo expira (~15 min) e uma ordenacao longa passa disso; renova
+# aqui, onde o stdin ainda e o terminal, antes de cada uso privilegiado
+renova_sudo() {
+    [ -n "$PREFIXO_PERF" ] || return 0
+    sudo -v || { echo "Erro: nao foi possivel renovar o sudo"; exit 1; }
+}
+
+
 # anota no csv o que aconteceu com a execucao; o medicao.sh ignora linhas com '#'
 marca() {
-    [ -w "$1" ] && echo "$2" >> "$1"
+    if [ -w "$1" ]; then
+        echo "$2" >> "$1"
+    else
+        echo "   aviso: sem permissao para anotar em '$1'"
+    fi
 }
 
 
@@ -237,9 +335,11 @@ for indice in "${INDICES[@]}"; do
 
             echo "-> $termo | n=$tamanho | exec $numero"
 
-            comando=($PREFIXO_PERF perf stat -x';' -o "$saida" -e "$EVENTOS")
+            comando=($PREFIXO_PERF perf stat -x';' $ESCOPO -o "$saida" -e "$EVENTOS")
             [ "$TEMPO_LIMITE" -gt 0 ] && comando+=(timeout --signal=TERM "$TEMPO_LIMITE")
             comando+=("$INTERPRETADOR" "$pasta/$script")
+
+            renova_sudo
 
             inicio=$SECONDS
             "${comando[@]}" < "$entrada" > /dev/null
@@ -247,8 +347,10 @@ for indice in "${INDICES[@]}"; do
             decorrido=$((SECONDS - inicio))
 
             # o perf escreve o csv como root quando roda sob sudo
-            [ -n "$PREFIXO_PERF" ] && [ -e "$saida" ] && \
-                sudo chown "$(id -u):$(id -g)" "$saida"
+            if [ -n "$PREFIXO_PERF" ] && [ -e "$saida" ]; then
+                renova_sudo
+                sudo -n chown "$(id -u):$(id -g)" "$saida"
+            fi
 
             if [ ! -e "$saida" ]; then
                 echo "   ERRO: perf nao gerou '$saida'"

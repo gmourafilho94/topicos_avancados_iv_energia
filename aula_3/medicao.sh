@@ -3,6 +3,7 @@
 # Consolida as medicoes do "perf stat -x';'" (bubble e insertion) em um unico csv.
 #
 # Uso: ./medicao.sh [arquivo_de_saida.csv]
+#   -h, --ajuda   mostra esta ajuda
 
 set -u
 
@@ -15,14 +16,33 @@ export LC_ALL=C
 declare -a CSV_TERMS
 declare -a FOLDERS_TERMS
 
-CSV_TERMS=("bolha" "insertion")
-FOLDERS_TERMS=("bubble" "insert")
+# arrays paralelos: termo do csv e pasta de cada algoritmo
+CSV_TERMS=("bolha"      "insertion" "bolha_better" "insertion_better")
+FOLDERS_TERMS=("bubble" "insert"    "bubble"       "insert")
 
 # separador e decimal usados no csv gerado
 SAIDA_SEP=";"
 SAIDA_DECIMAL=","
 
 SAIDA_PADRAO="medicoes_consolidadas.csv"
+
+
+mostra_ajuda() {
+    sed -n '3,6p' "$0" | sed 's/^# \{0,1\}//'
+}
+
+
+case "${1:-}" in
+    -h|--ajuda) mostra_ajuda; exit 0 ;;
+    # sem isso um "-h" viraria o nome do arquivo de saida
+    -*)         echo "Opcao desconhecida: $1"; mostra_ajuda; exit 1 ;;
+esac
+
+if [ $# -gt 1 ]; then
+    echo "Erro: esperado no maximo um argumento (o arquivo de saida)"
+    mostra_ajuda
+    exit 1
+fi
 
 
 SCRIPT_DIR=$(dirname "$0")
@@ -105,7 +125,7 @@ for indice in "${!CSV_TERMS[@]}"; do
 
     encontrados=0
 
-    for arquivo in "$pasta"/"$termo"_*_exec*.csv; do
+    for arquivo in "$pasta"/"$termo"_[0-9]*_exec*.csv; do
         [ -e "$arquivo" ] || continue
 
         base=$(basename "$arquivo" .csv)
@@ -140,4 +160,7 @@ fi
 } > "$SAIDA"
 
 echo "Total: $total medicao(oes)"
-echo "Arquivo gerado: $(pwd)/$SAIDA"
+case "$SAIDA" in
+    /*) echo "Arquivo gerado: $SAIDA" ;;
+    *)  echo "Arquivo gerado: $(pwd)/$SAIDA" ;;
+esac

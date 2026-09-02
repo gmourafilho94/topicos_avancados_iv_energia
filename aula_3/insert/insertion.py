@@ -1,4 +1,3 @@
-import time
 
 def insertion(numbers):
     for i in range(len(numbers)):
@@ -11,7 +10,7 @@ def insertion(numbers):
  
 def min_found(original_vector, position):
     n_min = min(original_vector[position:])
-    index = original_vector.index(n_min)
+    index = original_vector.index(n_min, position)
     
     return index, n_min
         
